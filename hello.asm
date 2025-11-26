@@ -2,7 +2,7 @@
 jmp start
 
 start_game: db 0
-;hmmmm,mm
+;hmmmm,m
 inst: db 'PRESS I TO GO INTO INSTRUCTION BOX'
 oldisr: dd 0
 colume: dw 0
