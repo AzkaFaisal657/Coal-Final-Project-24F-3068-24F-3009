@@ -1,14 +1,4 @@
-No, **do not copy-paste the previous block yet.** That was just a preview/skeleton to show you the new structure. It was missing the crucial data (the bricks, strings) and the helper functions (drawing, sound, etc.), so it wouldn't run.
 
-**Below is the FULL, Complete Code.**
-
-I have taken your original `hello.asm`, renamed **everything** to be readable (as we discussed), and included all the missing logic (brick arrays, sound, drawing functions).
-
-You can copy-paste this entire block into a file named `game.asm` (or `hello.asm`), assemble it, and it will run exactly like your original game but with code you can actually understand and modify.
-
-### The Complete Refactored Code
-
-```assembly
 [org 0x0100]
 jmp main
 
