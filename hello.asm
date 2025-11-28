@@ -52,7 +52,6 @@ clock_seconds:        dw 0       ; Seconds elapsed
 clock_ticks:          db 0       ; Ticks (18 per second)
 
 ; --- Brick Layouts (Memory Offsets) ---
-; These are pre-calculated memory addresses where bricks exist
 bricks_start_loc: dw 810 , 828 , 846 , 864 , 882 , 900 , 918 , 936 , 1290 , 1308 , 1326 , 1344 , 1362, 1380, 1398 , 1416 , 1770 , 1788 , 1806 , 1824 , 1842 , 1860 , 1878 , 1896
 bricks_end_loc:   dw 822 , 840 , 858 , 876 , 894 , 912 , 930 , 948 , 1302 , 1320 , 1338 , 1356 , 1374 , 1392 , 1414 , 1428 , 1782 , 1800  , 1818 , 1836 ,1854 , 1872 , 1890 , 1908
 
@@ -81,37 +80,57 @@ str_instruction_prompt: db 'PRESS I TO GO INTO INSTRUCTION BOX', 0
 ; UTILITY FUNCTIONS
 ; ==============================================================================
 
+; --- Calculate Screen Offset ---
+; Logic: Offset = (Row * 80 + Col) * 2
+; Inputs (Stack): [Row], [Col]
+; Output: DI contains the offset
+calculate_offset:
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    
+    mov ax, [bp+6]  ; Load Row
+    mov bx, 80
+    mul bx          ; Row * 80
+    add ax, [bp+4]  ; Add Col
+    shl ax, 1       ; Multiply by 2 (2 bytes per cell)
+    mov di, ax      ; Store result in DI
+    
+    pop bx
+    pop ax
+    pop bp
+    ret 4
+
 ; --- Play Sound ---
-; Uses the PC Speaker (Ports 42h, 43h, 61h) to beep
 play_sound:
     push ax
     push bx
     mov al, 182
     out 43h, al
-    mov ax, 4560        ; Frequency
+    mov ax, 4560        
     out 42h, al
     mov al, ah
     out 42h, al
     in al, 61h
-    or al, 00000011     ; Turn speaker ON
+    or al, 00000011     
     out 61h, al
     mov bx, 2
 sound_delay_outer:
     mov cx, 65535
-sound_delay_inner:      ; Waste CPU cycles to create duration
+sound_delay_inner:      
     dec cx
     jne sound_delay_inner
     dec bx
     jne sound_delay_outer
     in al, 61h
-    and al, 11111100b   ; Turn speaker OFF
+    and al, 11111100b   
     out 61h, al 
     pop bx
     pop ax
     ret 
 
 ; --- Clear Screen ---
-; Fills the video memory (0xb800) with empty spaces
 clear_screen: 
     push es
     push ax
@@ -120,8 +139,8 @@ clear_screen:
     mov ax, 0xb800
     mov es, ax 
     xor di, di 
-    mov ax, 0x0720      ; 07 = Grey Color, 20 = Space Char
-    mov cx, 2000        ; 2000 words = full screen (80x25)
+    mov ax, 0x0720      
+    mov cx, 2000        
     cld 
     rep stosw 
     pop di 
@@ -131,7 +150,7 @@ clear_screen:
     ret 
 
 ; --- Print String (Standard) ---
-; Stack Inputs: [Position], [String Offset], [Length]
+; Stack Inputs: [Row], [Col], [String Offset], [Length]
 print_string:
     push bp
     mov bp, sp
@@ -140,9 +159,16 @@ print_string:
     push cx
     push si
     push di
+    
     mov ax, 0xb800
     mov es, ax 
-    mov di, [bp+8]      ; Screen Position
+    
+    ; Calculate position using helper
+    push word [bp+10] ; Row
+    push word [bp+8]  ; Col
+    call calculate_offset
+    ; DI now holds the correct memory address
+    
     mov si, [bp+6]      ; String Offset
     mov cx, [bp+4]      ; Length
     mov ah, 0x07        ; Attribute (Grey on Black)
@@ -158,10 +184,10 @@ next_char:
     pop ax
     pop es
     pop bp
-    ret 6
+    ret 8 ; Pop 4 arguments (2 bytes each)
 
 ; --- Print String (Blinking) ---
-; Same as above, but uses Yellow/Blinking attribute
+; Stack Inputs: [Row], [Col], [String Offset], [Length]
 print_string_blink:
     push bp
     mov bp, sp
@@ -170,12 +196,17 @@ print_string_blink:
     push cx
     push si
     push di
+    
     mov ax, 0xb800
     mov es, ax 
-    mov di, [bp+8] 
-    mov si, [bp+6] 
-    mov cx, [bp+4] 
-    mov ah, 0x8e        ; Attribute 8E (Blinking Yellow)
+    
+    push word [bp+10] ; Row
+    push word [bp+8]  ; Col
+    call calculate_offset
+    
+    mov si, [bp+6]      ; String Offset
+    mov cx, [bp+4]      ; Length
+    mov ah, 0x8e        ; Attribute (Blinking Yellow)
 next_char_blink: 
     mov al, [si] 
     mov [es:di], ax 
@@ -188,11 +219,10 @@ next_char_blink:
     pop ax
     pop es
     pop bp
-    ret 6
+    ret 8
 
 ; --- Print Number ---
-; Converts value in stack to ASCII and prints it
-; Stack Inputs: [Position], [Number]
+; Stack Inputs: [Row], [Col], [Number]
 print_number: 
     push bp
     mov bp, sp
@@ -202,20 +232,26 @@ print_number:
     push cx
     push dx
     push di
+    
     mov ax, 0xb800
     mov es, ax 
+    
+    push word [bp+8] ; Row
+    push word [bp+6] ; Col
+    call calculate_offset
+    
     mov ax, [bp+4]      ; Number to print
     mov bx, 10 
     mov cx, 0 
 digit_loop: 
     mov dx, 0 
-    div bx              ; Divide by 10 to isolate digit
-    add dl, 0x30        ; Convert to ASCII
+    div bx              
+    add dl, 0x30        
     push dx 
     inc cx 
     cmp ax, 0 
     jnz digit_loop 
-    mov di, [bp+6]      ; Position
+    
 print_pos_loop: 
     pop dx 
     mov dh, 0x07 
@@ -229,15 +265,12 @@ print_pos_loop:
     pop ax
     pop es
     pop bp
-    ret 4
+    ret 6
 
 ; ==============================================================================
 ; DRAWING FUNCTIONS
 ; ==============================================================================
 
-; --- Draw Walls ---
-; Draws the box border around the play area.
-; Checks powerup_active to decide bottom wall color.
 draw_walls:
     push ax
     push es
@@ -245,8 +278,8 @@ draw_walls:
     mov ax, 0xb800
     mov es, ax
     
-    ; Top Wall
-    mov ah, 0x60        ; Brown background
+    ; Top Wall (Rows 3-4)
+    mov ah, 0x60        
     mov al, 0x20 
     mov di, 482
 top_wall_loop:
@@ -255,13 +288,13 @@ top_wall_loop:
     cmp di, 636
     jne top_wall_loop
     
-    ; Bottom Wall (Color Logic)
+    ; Bottom Wall (Rows 23)
     cmp byte[powerup_active], 1
     jne normal_base
-    mov ah, 0x40        ; Red background if Powerup Active
+    mov ah, 0x40        
     jmp draw_bottom
 normal_base:
-    mov ah, 0x60        ; Brown background Normal
+    mov ah, 0x60        
 draw_bottom:
     mov di, 3682
 bottom_wall_loop:
@@ -292,8 +325,6 @@ right_wall_loop:
     pop ax
     ret
 
-; --- Draw Initial Bricks ---
-; Renders the colorful brick layout based on memory hardcodes
 draw_initial_bricks:
     push es
     push cx
@@ -364,8 +395,6 @@ special_brick:
     pop es
     ret
 
-; --- Clear Paddle ---
-; Overwrites the paddle at [bp+4] with spaces
 clear_paddle_gfx:
     push bp
     mov bp, sp
@@ -380,7 +409,6 @@ clear_paddle_gfx:
     mov di, [bp+4] 
     rep stosw
     
-    ; Also clear the stuck ball if applicable
     mov di, [ball_stuck_offset] 
     mov word[es:di], ax
     pop cx
@@ -390,8 +418,6 @@ clear_paddle_gfx:
     pop bp
     ret 2
 
-; --- Draw Paddle ---
-; Draws the paddle at [bp+4] and calculates edges/center
 draw_paddle_gfx:
     push bp
     mov bp, sp
@@ -406,7 +432,6 @@ draw_paddle_gfx:
     mov cx, 13
     mov di, [bp+4]      ; Center Address
     
-    ; Save edges for collision logic
     mov word[paddle_draw_left], di
     rep stosw
     sub di, 2
@@ -416,7 +441,6 @@ draw_paddle_gfx:
     sub ax, 12
     mov word[paddle_mid_mem], ax
     
-    ; If ball is stuck, draw it on top of paddle
     cmp byte[is_ball_stuck], 1
     jne end_draw_paddle
     
@@ -446,8 +470,6 @@ end_draw_paddle:
 ; PHYSICS & GAMEPLAY LOGIC
 ; ==============================================================================
 
-; --- Update Paddle Movement ---
-; Reads key flags and moves paddle left/right
 update_paddle_movement:
     push ax
     push di
@@ -490,9 +512,7 @@ exit_paddle_logic:
     pop ax
     ret
 
-; --- Calculate Memory Offset ---
-; Converts X/Y coordinates into 0xb800 offset
-; Formula: (Y * 80 + X) * 2
+; --- Calculate Next Ball Position Logic ---
 calc_mem_offset:
     push bp
     mov bp, sp
@@ -506,8 +526,6 @@ calc_mem_offset:
     pop bp
     ret 4
 
-; --- Calculate Next Ball Position ---
-; Applies direction vectors (ball_dir_x/y) to X/Y to predict next spot
 calc_next_ball_pos:
     push ax
     push bx
@@ -563,8 +581,6 @@ do_calc:
     pop ax
     ret
 
-; --- Determine Bounce Direction ---
-; Calculates if ball hit left or right side of paddle
 determine_bounce_dir:
     push ax
     mov ax, word[ball_next_pos]
@@ -582,8 +598,6 @@ end_bounce_chk:
     pop ax
     ret
 
-; --- Handle Brick Collision ---
-; Identifies which brick was hit, removes it, and adds score
 handle_brick_collision:
     push es
     push ax
@@ -615,7 +629,6 @@ check_brick_end:
     jmp brick_func_end
 
 remove_brick: 
-    ; Check if powerup brick (Address 846)
     cmp ax, 846
     jne not_special
     mov byte[powerup_active], 1
@@ -630,8 +643,10 @@ not_special:
     add word[score], 5
     dec word[total_bricks]
     
-    ; Update Score on Screen
-    mov ax, 174
+    ; Update Score (Row 1, Col 7)
+    mov ax, 1
+    push ax
+    mov ax, 7
     push ax
     push word[score]
     call print_number
@@ -645,8 +660,6 @@ brick_func_end:
     pop es
     ret
 
-; --- Update Ball Physics (Main Logic) ---
-; Moves ball, checks collisions, updates display
 update_ball_physics:
     push es
     push ax
@@ -657,7 +670,6 @@ update_ball_physics:
     mov ax, 0xb800
     mov es, ax
     
-    ; Erase Old Ball
     mov di, [ball_old_pos]
     mov word[es:di], 0x0720
     
@@ -665,13 +677,11 @@ update_ball_physics:
     mov di, [ball_next_pos]
     mov ax, word[es:di]
     
-    ; Check what is at the next position
-    cmp ah, 0x07 ; Empty Space?
+    cmp ah, 0x07 
     je check_movement_flags
-    cmp ah, 0xb0 ; Paddle?
+    cmp ah, 0xb0 
     je hit_paddle
     
-    ; It must be a Brick
     call handle_brick_collision
     jmp update_flags
     
@@ -695,7 +705,6 @@ set_down:
     mov byte[ball_dir_y], 1
 
 check_movement_flags:
-    ; Wall Bounce Checks
     cmp word[ball_x], 3
     jne check_right_w
     mov byte[ball_dir_x], 1
@@ -711,14 +720,12 @@ check_y_w:
     mov byte[ball_dir_y], 1
     jmp do_ball_print
 check_bottom_w:
-    ; Check if ball hit bottom
     cmp byte[powerup_active], 0
     jne powerup_save
     
     cmp word[ball_y], 22
     jne do_ball_print
     
-    ; DIED: Reset ball to paddle
     mov byte[is_ball_stuck], 1 
     
     mov ax, word[paddle_mid_mem]
@@ -742,10 +749,9 @@ check_bottom_w:
 powerup_save:
     cmp word[ball_y], 23
     jne do_ball_print
-    mov byte[ball_dir_y], 0 ; Bounce off bottom
+    mov byte[ball_dir_y], 0 
 
 do_ball_print:
-    ; Update X/Y Variables
     cmp byte[ball_dir_x], 1
     jne dec_x
     add word[ball_x], 1
@@ -762,7 +768,6 @@ dec_y:
     sub word[ball_y], 1
     
 calc_final_pos:
-    ; Convert X/Y to Mem Address and Draw
     mov ax, word[ball_y]
     mov bx, 80
     mul bx
@@ -784,12 +789,9 @@ ball_exit:
     ret 
 
 ; ==============================================================================
-; INTERRUPT HANDLERS (ENGINE)
+; INTERRUPT HANDLERS
 ; ==============================================================================
 
-; --- Keyboard Handler (INT 9) ---
-; Detects keys and updates flags.
-; Uses PUSH CS / POP DS to fix segment addressing.
 keyboard_handler: 
     push ax
     push bx
@@ -798,73 +800,72 @@ keyboard_handler:
     push si
     push di
     push bp
-    push ds          ; Save Old DS
+    push ds          
     push es
     
     push cs
-    pop ds           ; Point DS to CS (Fixes variable access)
+    pop ds           
     
     mov word[key_right_pressed], 0
     mov word[key_left_pressed], 0
     mov ax, 0xb800
     mov es, ax 
     
-    in al, 0x60      ; Read Key Scan Code
+    in al, 0x60      
     
     cmp byte[is_game_active], 0
     jne game_mode_input
     
-    ; Menu Keys
-    cmp al, 0x1c     ; Enter
+    cmp al, 0x1c     
     jne check_instr_key
     mov byte[is_game_active], 1
     jmp kb_exit
 check_instr_key:
-    cmp al, 0x17     ; 'I'
+    cmp al, 0x17     
     jne kb_exit
     mov byte[menu_instruction_flag], 1
     cmp byte[is_game_active], 1
     jne kb_exit
 
 game_mode_input:
-    cmp al, 0x4b     ; Left Arrow
+    cmp al, 0x4b     
     jne try_right
     mov word[key_left_pressed], 1
     call update_paddle_movement
     jmp kb_exit
 try_right: 
-    cmp al, 0x4d     ; Right Arrow
+    cmp al, 0x4d     
     jne try_space
     mov word[key_right_pressed], 1
     call update_paddle_movement
     jmp kb_exit
 try_space:
-    cmp al, 0x39     ; Spacebar
+    cmp al, 0x39     
     jne try_exit
     mov byte[is_ball_stuck], 0
     jmp kb_exit
     
 try_exit: 
-    cmp al, 0x12     ; 'E'
+    cmp al, 0x12     
     jne try_quit
     mov byte[end_of_game_flag], 1
     jmp kb_exit
 try_quit:
-    cmp al, 0x10     ; 'Q'
+    cmp al, 0x10     
     jne try_restart
     mov byte[game_quit_flag], 1
     jmp kb_exit
 try_restart:
-    cmp al, 0x13     ; 'R'
+    cmp al, 0x13     
     jne kb_exit
     mov byte[game_restart_flag], 1
     
 kb_exit:
     mov al, 0x20
-    out 0x20, al     ; Send EOI
+    out 0x20, al     
     
     pop es
-    pop ds           ; Restore Old DS
+    pop ds           
     pop bp
     pop di
     pop si
@@ -874,20 +875,16 @@ kb_exit:
     pop ax 
     iret 
 
-; --- Timer Handler (INT 8) ---
-; Runs 18.2 times/second. Updates Ball and Time.
-; Uses PUSH CS / POP DS to fix segment addressing.
 timer_handler: 
     push ax
-    push ds          ; Save Old DS
+    push ds          
     
     push cs
-    pop ds           ; Point DS to CS
+    pop ds           
     
     cmp byte[is_game_active], 1
     jne timer_process_logic
     
-    ; Timer Counting
     inc byte[clock_ticks]
     cmp byte[clock_ticks], 18
     jne check_powerup_timer
@@ -904,7 +901,9 @@ check_powerup_timer:
     
 timer_process_logic:
     push ax
-    mov ax, 402
+    mov ax, 2 ; Row 2
+    push ax
+    mov ax, 41 ; Col 41
     push ax
     push word[clock_seconds]
     call print_number
@@ -915,7 +914,6 @@ timer_process_logic:
     cmp byte[is_game_active], 1
     jne timer_end
     
-    ; Game Speed Control (Every 2 ticks)
     inc byte[tick_counter]
     cmp byte[tick_counter], 2
     jne timer_end
@@ -928,7 +926,7 @@ timer_end:
     mov al, 0x20
     out 0x20, al 
     
-    pop ds           ; Restore Old DS
+    pop ds           
     pop ax
     iret 
 
@@ -959,7 +957,10 @@ show_start_menu:
     push ax
     call clear_screen
     
-    mov ax, 690
+    ; Welcome: Row 4, Col 25
+    mov ax, 4
+    push ax
+    mov ax, 25
     push ax
     mov ax, str_welcome
     push ax
@@ -967,7 +968,10 @@ show_start_menu:
     push ax
     call print_string_blink
     
-    mov ax, 1010
+    ; Options: Row 6, Col 25
+    mov ax, 6
+    push ax
+    mov ax, 25
     push ax
     mov ax, str_options
     push ax
@@ -975,7 +979,10 @@ show_start_menu:
     push ax
     call print_string
     
-    mov ax, 1330
+    ; Play: Row 8, Col 25
+    mov ax, 8
+    push ax
+    mov ax, 25
     push ax
     mov ax, str_play
     push ax
@@ -983,7 +990,10 @@ show_start_menu:
     push ax
     call print_string
     
-    mov ax, 1650
+    ; Prompt: Row 10, Col 25
+    mov ax, 10
+    push ax
+    mov ax, 25
     push ax
     mov ax, str_instruction_prompt
     push ax
@@ -998,7 +1008,10 @@ show_instructions:
     push ax
     call clear_screen
     
-    mov ax, 370
+    ; "Instructions": Row 2, Col 25
+    mov ax, 2
+    push ax
+    mov ax, 25
     push ax
     mov ax, str_instruction
     push ax
@@ -1006,7 +1019,10 @@ show_instructions:
     push ax
     call print_string_blink
     
-    mov ax, 690
+    ; "Total Lives": Row 4, Col 25
+    mov ax, 4
+    push ax
+    mov ax, 25
     push ax
     mov ax, str_total_lives
     push ax
@@ -1014,7 +1030,10 @@ show_instructions:
     push ax
     call print_string
     
-    mov ax, 1010
+    ; "Play Game": Row 6, Col 25
+    mov ax, 6
+    push ax
+    mov ax, 25
     push ax
     mov ax, str_play
     push ax
@@ -1022,7 +1041,10 @@ show_instructions:
     push ax
     call print_string
     
-    mov ax, 1330
+    ; "Solid Base": Row 8, Col 25
+    mov ax, 8
+    push ax
+    mov ax, 25
     push ax
     mov ax, str_solid_base
     push ax
@@ -1030,7 +1052,10 @@ show_instructions:
     push ax
     call print_string
     
-    mov ax, 1650
+    ; "Bonus": Row 10, Col 25
+    mov ax, 10
+    push ax
+    mov ax, 25
     push ax
     mov ax, str_bonus_note
     push ax
@@ -1038,7 +1063,10 @@ show_instructions:
     push ax
     call print_string
     
-    mov ax, 1970
+    ; "Space Bar": Row 12, Col 25
+    mov ax, 12
+    push ax
+    mov ax, 25
     push ax
     mov ax, str_space_bar
     push ax
@@ -1046,7 +1074,10 @@ show_instructions:
     push ax
     call print_string
     
-    mov ax, 2290
+    ; "Controls": Row 14, Col 25
+    mov ax, 14
+    push ax
+    mov ax, 25
     push ax
     mov ax, str_controls
     push ax
@@ -1054,7 +1085,10 @@ show_instructions:
     push ax
     call print_string
     
-    mov ax, 2610
+    ; "Exit": Row 16, Col 25
+    mov ax, 16
+    push ax
+    mov ax, 25
     push ax
     mov ax, str_exit
     push ax
@@ -1071,7 +1105,10 @@ show_game_over_menu:
     
     cmp byte[player_lives], 1
     jne check_win_condition
-    mov ax, 1990
+    ; Lose Text: Row 12, Col 35
+    mov ax, 12
+    push ax
+    mov ax, 35
     push ax
     mov ax, str_lose
     push ax
@@ -1081,7 +1118,10 @@ show_game_over_menu:
 check_win_condition:
     cmp word[total_bricks], 0
     jne display_results
-    mov ax, 1990
+    ; Lose Text: Row 12, Col 35
+    mov ax, 12
+    push ax
+    mov ax, 35
     push ax
     mov ax, str_lose
     push ax
@@ -1090,7 +1130,10 @@ check_win_condition:
     call print_string_blink
     
 display_results:
-    mov ax, 690
+    ; Score Label: Row 4, Col 25
+    mov ax, 4
+    push ax
+    mov ax, 25
     push ax
     mov ax, str_total_score
     push ax
@@ -1098,12 +1141,18 @@ display_results:
     push ax
     call print_string
     
-    mov ax, 728
+    ; Actual Score: Row 4, Col 44
+    mov ax, 4
+    push ax
+    mov ax, 44
     push ax
     push word[score]
     call print_number
     
-    mov ax, 1330
+    ; Lives Label: Row 8, Col 25
+    mov ax, 8
+    push ax
+    mov ax, 25
     push ax
     mov ax, str_lives_rem
     push ax
@@ -1111,12 +1160,18 @@ display_results:
     push ax
     call print_string
     
-    mov ax, 1392
+    ; Actual Lives: Row 8, Col 56
+    mov ax, 8
+    push ax
+    mov ax, 56
     push ax
     push word[player_lives]
     call print_number
     
-    mov ax, 1650
+    ; Restart: Row 10, Col 25
+    mov ax, 10
+    push ax
+    mov ax, 25
     push ax
     mov ax, str_restart
     push ax
@@ -1124,7 +1179,10 @@ display_results:
     push ax
     call print_string
     
-    mov ax, 1970
+    ; Quit: Row 12, Col 25
+    mov ax, 12
+    push ax
+    mov ax, 25
     push ax
     mov ax, str_quit_game
     push ax
@@ -1157,7 +1215,11 @@ do_game_restart:
 
 draw_ui_static_text:
     push ax
-    mov ax, 280
+    
+    ; Lives Label: Row 1, Col 60
+    mov ax, 1
+    push ax
+    mov ax, 60
     push ax
     mov ax, str_lives_lbl
     push ax
@@ -1165,7 +1227,10 @@ draw_ui_static_text:
     push ax
     call print_string_blink
     
-    mov ax, 162
+    ; Score Label: Row 1, Col 1
+    mov ax, 1
+    push ax
+    mov ax, 1
     push ax
     mov ax, str_score_lbl
     push ax
@@ -1173,7 +1238,10 @@ draw_ui_static_text:
     push ax
     call print_string_blink
     
-    mov ax, 390
+    ; Time Label: Row 2, Col 35
+    mov ax, 2
+    push ax
+    mov ax, 35
     push ax
     mov ax, str_time_lbl
     push ax
@@ -1235,7 +1303,10 @@ start_game_logic:
     call draw_ui_static_text
     call draw_lives_ui
     
-    mov ax, 174
+    ; Initial Score Print: Row 1, Col 7
+    mov ax, 1
+    push ax
+    mov ax, 7
     push ax
     push word[score]
     call print_number
