@@ -22,11 +22,15 @@ ball_next_pos:        dw 0
 is_ball_stuck:        db 0       
 ball_stuck_offset:    dw 0       
 ball_is_vertical:     db 0       
+ball_speed_delay:     db 2       ; 2 = Normal, 1 = Fast (Level 2)
 
 ; --- Paddle Physics ---
-paddle_center_mem:    dw 3760    
+paddle_center_mem:    dw 3760    ; Left edge of paddle in memory
+paddle_width_chars:   dw 9       ; Default 9
+paddle_width_bytes:   dw 18      ; Default 18
+paddle_half_bytes:    dw 8       ; Center offset
 wall_left_limit:      dw 3680    
-wall_right_limit:     dw 3830    
+wall_right_limit:     dw 3822    ; 3840 - 18
 
 key_left_pressed:     dw 0       
 key_right_pressed:    dw 0       
@@ -39,11 +43,17 @@ bounce_dir_flag:      db 0
 player_lives:         db 3
 score:                dw 0
 total_bricks:         dw 59
-bonus_score:          dw 0
+current_level:        db 1       ; 1 or 2
+bonus_score:          dw 0       ; Placeholder for bonus calculations
 
 ; --- Powerups ---
-powerup_active:       db 0       
-powerup_timer:        db 0       
+no_hit_timer:         dw 0       ; Counts ticks since last paddle hit
+powerup_active:       db 0       ; 1 = Falling
+powerup_y:            dw 0
+powerup_x:            dw 40      ; Drop from center
+powerup_old_pos:      dw 0
+is_paddle_big:        db 0
+big_paddle_timer:     dw 0       ; Duration counter for big paddle effect
 
 ; --- Time & System ---
 old_keyboard_isr:     dd 0       
@@ -85,6 +95,7 @@ str_start_txt:    db 'PRESS ENTER TO START', 0
 
 str_lose:         db 'GAME OVER', 0
 str_win_msg:      db 'YOU WIN!', 0
+str_level2_msg:   db 'LEVEL 2 START - SPEED UP!', 0
 str_score_lbl:    db 'SCORE', 0
 str_lives_lbl:    db 'LIVES', 0
 str_time_lbl:     db 'TIME', 0
@@ -98,44 +109,37 @@ str_quit_game:    db 'PRESS ESC TO QUIT', 0
 ; SOUND ENGINE
 ; ==============================================================================
 
-; --- Play Tone ---
-; Inputs: DI = Frequency (Lower is higher pitch), BX = Duration
 play_tone:
     push ax
     push cx
-    
     mov al, 182
     out 43h, al
-    mov ax, di          ; Frequency
+    mov ax, di          
     out 42h, al
     mov al, ah
     out 42h, al
     in al, 61h
-    or al, 00000011     ; Speaker ON
+    or al, 00000011     
     out 61h, al
-    
 sound_delay_loop:
-    mov cx, 2000        ; Inner delay multiplier
+    mov cx, 2000        
 delay_inner:
     dec cx
     jnz delay_inner
     dec bx
     jnz sound_delay_loop
-    
     in al, 61h
-    and al, 11111100b   ; Speaker OFF
+    and al, 11111100b   
     out 61h, al
-    
     pop cx
     pop ax
     ret
 
-; --- Specific Sounds ---
 sound_paddle_hit:
     push di
     push bx
-    mov di, 3000        ; High pitch
-    mov bx, 50          ; Short
+    mov di, 3000        
+    mov bx, 50          
     call play_tone
     pop bx
     pop di
@@ -144,8 +148,8 @@ sound_paddle_hit:
 sound_brick_break:
     push di
     push bx
-    mov di, 4500        ; Medium/Crunchy pitch
-    mov bx, 80          ; Medium length
+    mov di, 4500        
+    mov bx, 80          
     call play_tone
     pop bx
     pop di
@@ -154,8 +158,8 @@ sound_brick_break:
 sound_life_lost:
     push di
     push bx
-    mov di, 9000        ; Low pitch
-    mov bx, 500         ; Long
+    mov di, 9000        
+    mov bx, 500         
     call play_tone
     pop bx
     pop di
@@ -164,24 +168,31 @@ sound_life_lost:
 play_game_over_tune:
     push di
     push bx
-    
-    ; Beep 1
     mov di, 4000
     mov bx, 150
     call play_tone
-    
-    ; Slight pause (simulated by logic delay)
-    
-    ; Beep 2
     mov di, 3000
     mov bx, 150
     call play_tone
-    
-    ; Beep 3
     mov di, 2000
     mov bx, 300
     call play_tone
-    
+    pop bx
+    pop di
+    ret
+
+play_level_up_tune:
+    push di
+    push bx
+    mov di, 2000
+    mov bx, 100
+    call play_tone
+    mov di, 1500
+    mov bx, 100
+    call play_tone
+    mov di, 1000
+    mov bx, 200
+    call play_tone
     pop bx
     pop di
     ret
@@ -353,7 +364,7 @@ draw_brick_loop:
     shr ax, 1       
     mov dx, ax      ; DX = Width
 
-    ; [GAP LOGIC] Reduce width by 1 for visual spacing
+    ; Gap Logic: dec dx
     dec dx          
 
     ; Determine Row
@@ -382,7 +393,7 @@ cct_end:
     ret
 
 ; [TEXTURED PALETTES]
-color_row_1: ; Red Theme
+color_row_1: ; Red Theme (50 pts)
     call calc_color_toggle
     cmp bl, 0
     je r1_dark
@@ -392,7 +403,7 @@ r1_dark:
     mov ah, 0x4C 
     jmp apply_textured_brick
 
-color_row_2: ; Brown/Yellow Theme
+color_row_2: ; Brown/Yellow Theme (20 pts)
     call calc_color_toggle
     cmp bl, 0
     je r2_dark
@@ -402,7 +413,7 @@ r2_dark:
     mov ah, 0x6E 
     jmp apply_textured_brick
 
-color_row_3: ; Blue Theme
+color_row_3: ; Blue Theme (10 pts)
     call calc_color_toggle
     cmp bl, 0
     je r3_dark
@@ -412,7 +423,7 @@ r3_dark:
     mov ah, 0x19 
     jmp apply_textured_brick
 
-color_row_4: ; Magenta Theme
+color_row_4: ; Magenta Theme (5 pts)
     call calc_color_toggle
     cmp bl, 0
     je r4_dark
@@ -457,7 +468,7 @@ clear_paddle_gfx:
     mov es, ax
     mov ax, 0x0720
     
-    mov cx, 9
+    mov cx, [paddle_width_chars] ; Dynamic Width
     mov di, [bp+4] 
     rep stosw
     
@@ -482,7 +493,7 @@ draw_paddle_gfx:
     mov al, 0x20
     mov ah, 0x70        ; Grey Color
     
-    mov cx, 9
+    mov cx, [paddle_width_chars] ; Dynamic Width
     mov di, [bp+4]      
     
     mov word[paddle_draw_left], di
@@ -491,7 +502,7 @@ draw_paddle_gfx:
     mov word[paddle_draw_right], di
     
     mov ax, word[paddle_draw_right]
-    sub ax, 8
+    sub ax, [paddle_half_bytes] ; Dynamic Offset
     mov word[paddle_mid_mem], ax
     
     cmp byte[is_ball_stuck], 1
@@ -518,6 +529,101 @@ end_draw_paddle:
     pop es
     pop bp
     ret 2
+
+; ==============================================================================
+; POWERUP LOGIC
+; ==============================================================================
+
+spawn_powerup:
+    cmp byte[powerup_active], 1
+    je spawn_exit
+    
+    mov byte[powerup_active], 1
+    mov word[powerup_y], 4      ; Start at top
+    mov word[powerup_x], 40     ; Center
+    
+spawn_exit:
+    ret
+
+update_powerup:
+    cmp byte[powerup_active], 0
+    je update_buff_timer
+    
+    ; Erase Old 'P'
+    mov ax, 0xb800
+    mov es, ax
+    mov di, [powerup_old_pos]
+    mov word[es:di], 0x0720
+    
+    ; Move Down
+    inc word[powerup_y]
+    
+    ; Calc Offset
+    mov ax, [powerup_y]
+    mov bx, 80
+    mul bx
+    add ax, [powerup_x]
+    shl ax, 1
+    mov di, ax
+    mov [powerup_old_pos], di
+    
+    ; Draw New 'P'
+    mov ah, 0xF0        ; White BG, Black Text
+    mov al, 'P'
+    mov word[es:di], ax
+    
+    ; Check Bottom
+    cmp word[powerup_y], 24
+    je remove_powerup
+    
+    ; Check Collision with Paddle (Row 23)
+    cmp word[powerup_y], 23
+    jne powerup_exit
+    
+    ; Check X range
+    cmp di, [paddle_draw_left]
+    jb powerup_exit
+    cmp di, [paddle_draw_right]
+    ja powerup_exit
+    
+    ; CAUGHT!
+    mov byte[is_paddle_big], 1
+    mov byte[powerup_active], 0
+    mov word[powerup_y], 0
+    mov word[es:di], 0x0720 ; Erase P
+    
+    ; Grow Paddle
+    mov word[paddle_width_chars], 15
+    mov word[paddle_width_bytes], 30
+    mov word[paddle_half_bytes], 14
+    mov word[wall_right_limit], 3810 ; 3840 - 30
+    
+    mov word[big_paddle_timer], 270 ; 15 sec * 18 ticks = 270
+    call sound_paddle_hit ; Audio feedback
+    jmp powerup_exit
+
+remove_powerup:
+    mov byte[powerup_active], 0
+    mov word[powerup_y], 0
+    mov di, [powerup_old_pos]
+    mov word[es:di], 0x0720
+
+update_buff_timer:
+    cmp byte[is_paddle_big], 1
+    jne powerup_exit
+    dec word[big_paddle_timer]
+    cmp word[big_paddle_timer], 0
+    jne powerup_exit
+    
+    ; Revert Paddle
+    mov byte[is_paddle_big], 0
+    mov word[paddle_width_chars], 9
+    mov word[paddle_width_bytes], 18
+    mov word[paddle_half_bytes], 8
+    mov word[wall_right_limit], 3822
+
+powerup_exit:
+    ret
 
 ; ==============================================================================
 ; PHYSICS & GAMEPLAY LOGIC
@@ -715,10 +821,10 @@ remove_brick:
     mov ax, 0x0720
     rep stosw   ; Erase
     
-    ; [UPDATED] Call new sound function
     call sound_brick_break
     dec word[total_bricks]
     
+    ; [SCORING]
     cmp si, 20
     jb score_50
     cmp si, 52
@@ -783,8 +889,8 @@ update_ball_physics:
     jmp calc_final_pos
     
 hit_paddle:
-    ; [UPDATED] Call new sound function
     call sound_paddle_hit
+    mov word[no_hit_timer], 0 ; Reset no hit timer
 
     mov ax, word[ball_next_pos]
     sub ax, [paddle_mid_mem]
@@ -837,7 +943,6 @@ check_bottom_w:
     cmp word[ball_y], 24    
     jne do_ball_print
     
-    ; [UPDATED] Call new sound function
     call sound_life_lost
 
     mov byte[is_ball_stuck], 1 
@@ -936,7 +1041,6 @@ keyboard_handler:
     mov es, ax 
     in al, 0x60      
     
-    ; [UPDATED] Check for ESC (0x01) immediately
     cmp al, 0x01 ; ESC
     je set_quit_flag
 
@@ -1005,17 +1109,9 @@ timer_handler:
     
     inc byte[clock_ticks]
     cmp byte[clock_ticks], 18
-    jne check_powerup_timer
+    jne timer_process_logic
     add word[clock_seconds], 1
     mov byte[clock_ticks], 0
-    
-check_powerup_timer:
-    cmp byte[powerup_active], 1
-    jne timer_process_logic
-    inc byte[powerup_timer]
-    cmp byte[powerup_timer], 180
-    jne timer_process_logic
-    mov byte[powerup_active], 0
     
 timer_process_logic:
     push ax
@@ -1032,8 +1128,21 @@ timer_process_logic:
     cmp byte[is_game_active], 1
     jne timer_end
     
+    inc word[no_hit_timer]
+    cmp word[no_hit_timer], 180 ; 10 seconds
+    jne skip_powerup_spawn
+    call spawn_powerup
+    
+skip_powerup_spawn:
+    ; Update Powerup (Drop) every 2 ticks
+    test byte[tick_counter], 1
+    jnz skip_powerup_update
+    call update_powerup
+skip_powerup_update:
+
     inc byte[tick_counter]
-    cmp byte[tick_counter], 2
+    mov al, [ball_speed_delay]
+    cmp byte[tick_counter], al
     jne timer_end
     
     call update_ball_physics
@@ -1163,11 +1272,9 @@ show_start_menu:
     ret
 
 show_instructions:
-    ; Not used in main flow now, but kept for legacy calls if any
     ret
 
 show_game_over_menu:
-    ; [UPDATED] Play game over sound
     call play_game_over_tune
 
     push ax
@@ -1204,7 +1311,6 @@ check_win_condition:
     call print_string_blink
 
 display_results:
-    ; Final Score Label
     mov ax, 12
     push ax
     mov ax, 32
@@ -1215,7 +1321,6 @@ display_results:
     push ax
     call print_string
     
-    ; Actual Score
     mov ax, 12
     push ax
     mov ax, 45
@@ -1223,7 +1328,6 @@ display_results:
     push word[score]
     call print_number
     
-    ; Restart
     mov ax, 16
     push ax
     mov ax, 30
@@ -1234,7 +1338,6 @@ display_results:
     push ax
     call print_string
     
-    ; Quit
     mov ax, 18
     push ax
     mov ax, 30
@@ -1266,6 +1369,8 @@ do_game_restart:
     mov word[score], 0
     mov byte[end_of_game_flag], 0
     mov word[bonus_score], 0
+    mov byte[current_level], 1
+    mov byte[ball_speed_delay], 2
     ret
 
 draw_ui_static_text:
@@ -1348,7 +1453,6 @@ menu_loop:
     jmp start_game_logic
 
 enter_instruction_screen:
-    ; Unused, flow goes direct to game
     jmp start_game_logic
 
 instr_wait:
@@ -1373,7 +1477,6 @@ start_game_logic:
     call draw_initial_bricks
     mov byte[is_ball_stuck], 1
     
-    ; Force Initial Draw of Paddle
     mov ax, [paddle_center_mem]
     push ax
     call draw_paddle_gfx
@@ -1382,12 +1485,42 @@ game_loop:
     cmp byte[game_quit_flag], 1
     je exit_to_dos
     cmp word[total_bricks], 0
-    je enter_end_game 
+    je check_level_progression 
     cmp byte[end_of_game_flag], 1
     je enter_end_game
     cmp byte[player_lives], 0
     je enter_end_game
     jmp game_loop
+
+check_level_progression:
+    cmp byte[current_level], 1
+    jne enter_end_game ; If level 2 cleared, win
+    
+    ; LEVEL 2 INIT
+    inc byte[current_level]
+    mov byte[ball_speed_delay], 1 ; Double Speed
+    mov word[total_bricks], 59
+    
+    call clear_screen
+    mov ax, 10
+    push ax
+    mov ax, 25
+    push ax
+    mov ax, str_level2_msg
+    push ax
+    mov ax, 25
+    push ax
+    call print_string_blink
+    
+    call play_level_up_tune
+    
+    ; Simple delay loop
+    mov cx, 0xFFFF
+delay_lvl:
+    dec cx
+    jnz delay_lvl
+    
+    jmp start_game_logic
 
 enter_end_game:
     mov byte[is_game_active], 0
