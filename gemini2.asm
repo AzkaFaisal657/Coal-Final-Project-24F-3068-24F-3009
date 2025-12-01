@@ -42,10 +42,9 @@ bounce_dir_flag:      db 0
 ; --- Player Stats ---
 player_lives:         db 3
 score:                dw 0
-; [UPDATED] 10 + 16 + 20 + 13 = 59 bricks
 total_bricks:         dw 59
-bonus_score:          dw 0
 current_level:        db 1       ; 1 or 2
+bonus_score:          dw 0       
 
 ; --- Powerups ---
 no_hit_timer:         dw 0       ; Counts ticks since last paddle hit
@@ -64,16 +63,16 @@ clock_seconds:        dw 0
 clock_ticks:          db 0       
 
 ; ==============================================================================
-; BRICK LAYOUTS - FULL WIDTH SPAN (80 Cols)
+; BRICK LAYOUTS
 ; ==============================================================================
 bricks_start_loc: 
-    ; Row 1 (10 Bricks, Width 8)
+    ; Row 1
     dw 960, 976, 992, 1008, 1024, 1040, 1056, 1072, 1088, 1104
-    ; Row 2 (16 Bricks, Width 5)
+    ; Row 2
     dw 1120, 1130, 1140, 1150, 1160, 1170, 1180, 1190, 1200, 1210, 1220, 1230, 1240, 1250, 1260, 1270
-    ; Row 3 (20 Bricks, Width 4)
+    ; Row 3
     dw 1280, 1288, 1296, 1304, 1312, 1320, 1328, 1336, 1344, 1352, 1360, 1368, 1376, 1384, 1392, 1400, 1408, 1416, 1424, 1432
-    ; Row 4 (13 Bricks, Mixed 8 and 4)
+    ; Row 4
     dw 1440, 1456, 1464, 1480, 1488, 1504, 1512, 1528, 1536, 1552, 1560, 1576, 1584
 
 bricks_end_loc:
@@ -92,6 +91,7 @@ str_rules_title:  db 'RULES & CONTROLS:', 0
 str_rule_1:       db '- BREAK ALL BRICKS TO WIN', 0
 str_rule_2:       db '- 3 LIVES | SCORE POINTS', 0
 str_controls_txt: db 'ARROWS: MOVE | ESC: EXIT', 0
+str_cheat_txt:    db 'L: SKIP LEVEL (TEST)', 0
 str_start_txt:    db 'PRESS ENTER TO START', 0
 
 str_lose:         db 'GAME OVER', 0
@@ -547,7 +547,6 @@ spawn_exit:
     ret
 
 update_powerup:
-    ; [FIXED] Trampoline Jump for Distance
     cmp byte[powerup_active], 0
     jne process_powerup
     jmp update_buff_timer
@@ -582,11 +581,8 @@ process_powerup:
     
     ; Check Collision with Paddle (Row 23)
     cmp word[powerup_y], 23
-    ; [FIXED] Trampoline Jump for Distance
-    je check_paddle_x
-    jmp powerup_exit
-
-check_paddle_x:
+    jne powerup_exit_trampoline
+    
     ; Check X range
     cmp di, [paddle_draw_left]
     jb powerup_exit_trampoline
@@ -606,7 +602,7 @@ check_paddle_x:
     mov word[wall_right_limit], 3810 ; 3840 - 30
     
     mov word[big_paddle_timer], 270 ; 15 sec * 18 ticks = 270
-    call sound_paddle_hit ; Audio feedback
+    call sound_paddle_hit 
     jmp powerup_exit
 
 powerup_exit_trampoline:
@@ -625,12 +621,21 @@ update_buff_timer:
     cmp word[big_paddle_timer], 0
     jne powerup_exit
     
-    ; Revert Paddle
+    ; [FIXED] REVERT PADDLE LOGIC WITH CLEANUP
+    ; 1. Clear the currently BIG paddle
+    mov di, [paddle_center_mem]
+    push di
+    call clear_paddle_gfx
+    ; 2. Reset variables to SMALL
     mov byte[is_paddle_big], 0
     mov word[paddle_width_chars], 9
     mov word[paddle_width_bytes], 18
     mov word[paddle_half_bytes], 8
     mov word[wall_right_limit], 3822
+    ; 3. Draw the new SMALL paddle
+    mov di, [paddle_center_mem]
+    push di
+    call draw_paddle_gfx
 
 powerup_exit:
     ret
@@ -653,8 +658,10 @@ move_paddle_right:
     mov ax, word[paddle_center_mem]
     add ax, 8                       
     cmp ax, word[wall_right_limit]
-    ja exit_paddle_logic
+    jbe do_move_right       ; [FIXED] Clamp logic
+    mov ax, word[wall_right_limit] ; Snap to limit if exceeded
     
+do_move_right:
     mov di, word[paddle_center_mem]
     push di
     call clear_paddle_gfx
@@ -667,8 +674,10 @@ move_paddle_left:
     mov ax, word[paddle_center_mem]
     sub ax, 8                       
     cmp ax, word[wall_left_limit]
-    jb exit_paddle_logic
+    jae do_move_left        ; [FIXED] Clamp logic
+    mov ax, word[wall_left_limit]
     
+do_move_left:
     mov di, word[paddle_center_mem]
     push di
     call clear_paddle_gfx
@@ -892,7 +901,7 @@ update_ball_physics:
     cmp ah, 0x07 ; Empty Space?
     je check_movement_flags
     
-    cmp ah, 0x70 ; [MODIFIED] Check for Grey Paddle
+    cmp ah, 0x70 ; Paddle Color?
     je hit_paddle
     
     call handle_brick_collision
@@ -1053,7 +1062,14 @@ keyboard_handler:
     
     cmp al, 0x01 ; ESC
     je set_quit_flag
+    
+    ; [ADDED] Cheat Key 'L' (0x26)
+    cmp al, 0x26
+    jne check_menu_input
+    mov word[total_bricks], 0 ; Instant Win/Next Level
+    jmp kb_exit
 
+check_menu_input:
     cmp byte[is_game_active], 0
     jne game_mode_input
     
@@ -1119,7 +1135,7 @@ timer_handler:
     
     inc byte[clock_ticks]
     cmp byte[clock_ticks], 18
-    jne timer_process_logic ; [FIXED] Jump directly to logic instead of missing check
+    jne timer_process_logic
     add word[clock_seconds], 1
     mov byte[clock_ticks], 0
     
@@ -1264,6 +1280,17 @@ show_start_menu:
     mov ax, str_controls_txt
     push ax
     mov ax, 24
+    push ax
+    call print_string
+
+    ; Cheat
+    mov ax, 16
+    push ax
+    mov ax, 25
+    push ax
+    mov ax, str_cheat_txt
+    push ax
+    mov ax, 20
     push ax
     call print_string
     
@@ -1454,7 +1481,6 @@ main:
     call show_start_menu
     
 menu_loop:
-    ; [FIXED] Inverted logic to avoid short jump error
     cmp byte[game_quit_flag], 1
     je exit_trampoline
     
