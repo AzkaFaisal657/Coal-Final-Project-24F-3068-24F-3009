@@ -100,7 +100,7 @@ str_level2_msg:   db 'LEVEL 2 START - SPEED UP!', 0
 str_score_lbl:    db 'SCORE', 0
 str_lives_lbl:    db 'LIVES', 0
 str_time_lbl:     db 'TIME', 0
-str_header_msg:   db '--- ASM BREAKOUT ---', 0 
+str_header_msg:   db '--EENTON WALI GAME--', 0 
 str_total_score:  db 'FINAL SCORE:', 0
 str_lives_rem:    db 'LIVES LEFT:', 0
 str_restart:      db 'PRESS R TO RESTART', 0
